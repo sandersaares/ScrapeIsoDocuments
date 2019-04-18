@@ -9,6 +9,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ScrapeIsoDocuments
 {
@@ -32,7 +34,13 @@ namespace ScrapeIsoDocuments
         };
 
         // The ISO website tends to fail a lot. Just retry.
-        private static RetryPolicy<string> ScrapePolicy = Policy<string>.Handle<Exception>().Retry(5);
+        private static RetryPolicy<string> ScrapeDocumentListPolicy = Policy<string>.Handle<Exception>().Retry(3);
+        private static AsyncRetryPolicy<string> ScrapeSingleDocumentPolicy = Policy<string>.Handle<Exception>().WaitAndRetryAsync(new[]
+        {
+            TimeSpan.Zero,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(10)
+        });
 
         private sealed class Entry
         {
@@ -54,6 +62,9 @@ namespace ScrapeIsoDocuments
             public bool IsRetired { get; set; }
             public bool IsUnderDevelopment { get; set; }
 
+            // May be null if never published.
+            public string RawDate { get; set; }
+
             // May be null.
             public string IsoNumber { get; set; }
 
@@ -66,6 +77,8 @@ namespace ScrapeIsoDocuments
 
         // We just want the first 12345-56:7890 looking string, that's it.
         private static readonly Regex ExtractIsoNumber = new Regex(@"([\d-]+:[\d-]+)", RegexOptions.Compiled);
+
+        private static readonly Regex RawDateRegex = new Regex(@"^\d{4}-\d{2}$", RegexOptions.Compiled);
 
         public static string TrimIsoPrefix(string title)
         {
@@ -173,20 +186,20 @@ namespace ScrapeIsoDocuments
             // ISO/IEC 21000-22:2016/Amd 1:2018
             // This becomes "iso21000-22-2016-amd1-2018" in SpecRef.
 
-            // We could extract more detailed info by looking at the page of each individual document but
-            // for the moment, the cost/benefit ratio is good enough going by the main catalog page.
-
             if (Directory.Exists(OutputDirectory))
                 Directory.Delete(OutputDirectory, true);
             Directory.CreateDirectory(OutputDirectory);
 
             Console.WriteLine("Output will be saved in " + Path.GetFullPath(OutputDirectory));
 
-            var client = new HttpClient
+            var documentListClient = new HttpClient
             {
                 // The ISO website can be quite slow.
                 Timeout = TimeSpan.FromSeconds(300)
             };
+
+            // We don't allow big timeout here - a single page must load fast.
+            var singleDocumentClient = new HttpClient();
 
             foreach ((var outfile, var pageUrl) in CatalogPagesToScrape)
             {
@@ -196,7 +209,7 @@ namespace ScrapeIsoDocuments
 
                 Console.WriteLine($"Loading catalog page: {pageUrl}");
 
-                var pageHtml = ScrapePolicy.Execute(() => client.GetStringAsync(pageUrl).Result);
+                var pageHtml = ScrapeDocumentListPolicy.Execute(() => documentListClient.GetStringAsync(pageUrl).Result);
                 page.LoadHtml(pageHtml);
 
                 var dataTable = page.GetElementbyId("datatable-tc-projects");
@@ -256,7 +269,7 @@ namespace ScrapeIsoDocuments
                             throw new Exception("Unexpected label: " + label.InnerText);
                     }
 
-                    Console.WriteLine($"{title} [{status}] is titled \"{summary}\" and can be found at {absoluteUrl} and will get the ID {id}");
+                    Console.WriteLine($"{title} [{status}]is titled \"{summary}\" and can be found at {absoluteUrl} and will get the ID {id}");
 
                     if (entries.ContainsKey(id))
                     {
@@ -290,7 +303,7 @@ namespace ScrapeIsoDocuments
                         Title = summary ?? title, // Summary is optional on ISO website but we need something.
                         IsoNumber = isoNumber,
                         // We drop the query string because it seems needless.
-                        Url = absoluteUrl.GetLeftPart(UriPartial.Path),
+                        Url = absoluteUrl.GetLeftPart(UriPartial.Path)
                     };
 
                     entries[id] = entry;
@@ -320,6 +333,49 @@ namespace ScrapeIsoDocuments
                     Console.WriteLine($"Marking as obsoleted: {obsolete.Key} -> {obsolete.Value.ObsoletedBy}");
                 }
 
+                // Finally, load all the details from the page of each item.
+                var parallelismSemaphore = new SemaphoreSlim(30);
+                var tasks = new List<Task>();
+
+                foreach (var entry in entries)
+                {
+                    tasks.Add(Task.Run(async delegate
+                    {
+                        await parallelismSemaphore.WaitAsync();
+
+                        try
+                        {
+                            // Load the page of the document to get the publication date.
+                            var documentPageString = await ScrapeSingleDocumentPolicy.ExecuteAsync(() => singleDocumentClient.GetStringAsync(entry.Value.Url));
+                            var documentPage = new HtmlDocument();
+                            documentPage.LoadHtml(documentPageString);
+
+                            var releaseDate = documentPage.DocumentNode.SelectSingleNode("//span[@itemprop='releaseDate']");
+
+                            // "Under development" or "Deleted" entries do not have release date.
+                            if (releaseDate == null && entry.Value.IsUnderDevelopment == false && entry.Value.IsRetired == false)
+                                throw new Exception($"Unable to find release date for {entry.Key} at {entry.Value.Url}");
+
+                            var rawDate = releaseDate?.InnerText;
+
+                            if (rawDate != null)
+                            {
+                                if (!RawDateRegex.IsMatch(rawDate))
+                                    throw new Exception($"{entry.Key} release date had invalid syntax: {rawDate}");
+
+                                entry.Value.RawDate = rawDate;
+                                Console.WriteLine($"{entry.Key} was published at {rawDate}");
+                            }
+                        }
+                        finally
+                        {
+                            parallelismSemaphore.Release();
+                        }
+                    }));
+                }
+
+                Task.WaitAll(tasks.ToArray());
+
                 // Ok, we got all our entries. Serialize.
                 var json = new Dictionary<string, object>(entries.Count);
 
@@ -338,7 +394,8 @@ namespace ScrapeIsoDocuments
                         isoNumber = pair.Value.IsoNumber,
                         isSuperseded = pair.Value.IsSuperseded,
                         isRetired = pair.Value.IsRetired,
-                        obsoletedBy = obsoletedBy
+                        obsoletedBy = obsoletedBy,
+                        rawDate = pair.Value.RawDate
                     };
                 }
 
