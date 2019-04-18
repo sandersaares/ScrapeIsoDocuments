@@ -289,7 +289,8 @@ namespace ScrapeIsoDocuments
                         Status = status,
                         Title = summary ?? title, // Summary is optional on ISO website but we need something.
                         IsoNumber = isoNumber,
-                        Url = absoluteUrl.ToString(),
+                        // We drop the query string because it seems needless.
+                        Url = absoluteUrl.GetLeftPart(UriPartial.Path),
                     };
 
                     entries[id] = entry;
