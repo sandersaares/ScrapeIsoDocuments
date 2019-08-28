@@ -221,8 +221,8 @@ namespace ScrapeIsoDocuments
 
                 foreach (var document in documents)
                 {
-                    var title = document.SelectSingleNode("div/div/a")?.GetAttributeValue("title", null)?.Trim();
-                    var relativeUrl = document.SelectSingleNode("div/div/a")?.GetAttributeValue("href", null);
+                    var title = document.SelectSingleNode("div/h6/a")?.GetAttributeValue("title", null)?.Trim();
+                    var relativeUrl = document.SelectSingleNode("div/h6/a")?.GetAttributeValue("href", null);
 
                     // Optional. Some documents do not have it.
                     var summary = document.SelectSingleNode("div/div[@class='entry-summary']")?.InnerText
@@ -242,31 +242,35 @@ namespace ScrapeIsoDocuments
                     (var baseId, var id) = MakeIds(title, isAddon);
                     var isoNumber = MakeIsoNumber(title, isAddon);
 
-                    var label = document.SelectSingleNode("div/div/span[contains(@class, 'small')]");
-
-                    string status = "Published";
+                    // The published/etc statuses are depicted as icons in the list.
+                    var titleSpan = document.SelectSingleNode("div/h6/a/div[@class='entry-title']/span");
+                    string status;
+                    bool underDevelopment = false;
                     bool withdrawn = false;
                     bool deleted = false;
-                    bool underDevelopment = false;
-
-                    switch (label?.InnerText)
+                    
+                    if (titleSpan.HasClass("glyphicon-ok-circle"))
                     {
-                        case "[Withdrawn]":
-                            status = "Withdrawn";
-                            withdrawn = true;
-                            break;
-                        case "[Under development]":
-                            status = "Under development";
-                            underDevelopment = true;
-                            break;
-                        case "[Deleted]":
-                            status = "Deleted";
-                            deleted = true;
-                            break;
-                        case null:
-                            break;
-                        default:
-                            throw new Exception("Unexpected label: " + label.InnerText);
+                        status = "Published";
+                    }
+                    else if (titleSpan.HasClass("glyphicon-ban-circle"))
+                    {
+                        status = "Withdrawn";
+                        withdrawn = true;
+                    }
+                    else if (titleSpan.HasClass("glyphicon-remove-circle"))
+                    {
+                        status = "Deleted";
+                        deleted = true;
+                    }
+                    else if (titleSpan.HasClass("glyphicon-record"))
+                    {
+                        status = "Under development";
+                        underDevelopment = true;
+                    }
+                    else
+                    {
+                        throw new Exception("Unexpected status icon: " + string.Join(", ", titleSpan.GetClasses()));
                     }
 
                     Console.WriteLine($"{title} [{status}]is titled \"{summary}\" and can be found at {absoluteUrl} and will get the ID {id}");
