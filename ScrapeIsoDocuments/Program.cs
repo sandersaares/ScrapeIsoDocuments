@@ -62,6 +62,9 @@ namespace ScrapeIsoDocuments
             public bool IsRetired { get; set; }
             public bool IsUnderDevelopment { get; set; }
 
+            // Sometimes documents are marked by ISO as "under review" when a new version is already published.
+            public bool IsPotentiallyImplicitlySuperseded { get; set; }
+
             // May be null if never published.
             public string RawDate { get; set; }
 
@@ -273,11 +276,29 @@ namespace ScrapeIsoDocuments
                         throw new Exception("Unexpected status icon: " + string.Join(", ", titleSpan.GetClasses()));
                     }
 
+                    // Sometimes documents are listed as published but a status of "under review", which implies
+                    // that there may already be a newer versions, also with "published" status, which implicitly
+                    // supersedes it but which explicitly has not yet invalidated the old one.
+                    // next is #text (newline) and nextnext is the second column
+                    var stageColumn = document.NextSibling.NextSibling;
+                    var stageCode = stageColumn?.SelectSingleNode("a");
+
+                    var stage = stageCode?.InnerText;
+
+                    if (string.IsNullOrWhiteSpace(stage))
+                        throw new Exception($"Unable to determine publication stage for {id}.");
+
+                    // https://www.iso.org/stage-codes.html#90.92
+                    bool isUnderReview = stage.StartsWith("90.");
+
                     Console.WriteLine($"{title} [{status}]is titled \"{summary}\" and can be found at {absoluteUrl} and will get the ID {id}");
 
                     if (entries.ContainsKey(id))
                     {
-                        if (entries[id].IsUnderDevelopment || entries[id].IsRetired || entries[id].IsSuperseded)
+                        if (entries[id].IsUnderDevelopment
+                            || entries[id].IsRetired
+                            || entries[id].IsSuperseded
+                            || entries[id].IsPotentiallyImplicitlySuperseded)
                         {
                             Console.WriteLine($"Overwriting {id} because this one is a more preferred version.");
                         }
@@ -303,6 +324,7 @@ namespace ScrapeIsoDocuments
                         IsSuperseded = withdrawn, // Maybe not always accurate translation but what can you do.
                         IsRetired = deleted,
                         IsUnderDevelopment = underDevelopment,
+                        IsPotentiallyImplicitlySuperseded = isUnderReview,
                         Status = status,
                         Title = summary ?? title, // Summary is optional on ISO website but we need something.
                         IsoNumber = isoNumber,
