@@ -224,7 +224,7 @@ namespace ScrapeIsoDocuments
 
                 foreach (var document in documents)
                 {
-                    var title = document.SelectSingleNode("div/h6/a")?.GetAttributeValue("title", null)?.Trim();
+                    var title = document.SelectSingleNode("div/h6/a/div[@class='entry-title']")?.InnerText.Trim();
                     var relativeUrl = document.SelectSingleNode("div/h6/a")?.GetAttributeValue("href", null);
 
                     // Optional. Some documents do not have it.
@@ -291,7 +291,7 @@ namespace ScrapeIsoDocuments
                     // https://www.iso.org/stage-codes.html#90.92
                     bool isUnderReview = stage.StartsWith("90.");
 
-                    Console.WriteLine($"{title} [{status}]is titled \"{summary}\" and can be found at {absoluteUrl} and will get the ID {id}");
+                    Console.WriteLine($"{title} [{status}] is titled \"{summary}\" and can be found at {absoluteUrl} and will get the ID {id}");
 
                     if (entries.ContainsKey(id))
                     {
