@@ -346,6 +346,10 @@ namespace ScrapeIsoDocuments
 
                 foreach (var obsolete in notPublishedDocuments)
                 {
+                    // Documents that are still under development cannot be obsoleted.
+                    if (obsolete.Value.IsUnderDevelopment)
+                        continue;
+
                     // If we can find a valid non-addon document with the same BaseID, we reference it as the fresh version.
                     var newAndImproved = publishedDocuments.Where(pair => pair.Value.BaseId == obsolete.Value.BaseId && !pair.Value.IsAddonDocument).ToArray();
 
